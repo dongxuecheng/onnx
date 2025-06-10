@@ -1,10 +1,11 @@
 import cv2
 import numpy as np
+import ast  # 导入 ast 模块
 from typing import List, Tuple, Dict, Any
-from base_onnx_inference import BaseONNXInference, ModelType, TaskResult
+from base_onnx import BaseONNX, ModelType, TaskResult
 
 
-class DetectionInference(BaseONNXInference):
+class Detect(BaseONNX):
     """目标检测推理器"""
     
     def __init__(self, model_path: str, device: str = "auto", **kwargs):
@@ -15,26 +16,10 @@ class DetectionInference(BaseONNXInference):
             model_path: ONNX模型路径
             device: 设备类型 ("auto", "cuda", "cpu")
             **kwargs: 其他参数
-        """
-        # 设置默认类别名称
-        if 'class_names' not in kwargs:
-            kwargs['class_names'] = self._get_coco_names()
-        
+        """        
         super().__init__(model_path, ModelType.DETECTION, device, **kwargs)
     
-    def _get_coco_names(self) -> List[str]:
-        """获取COCO数据集类别名称"""
-        return [
-            'person', 'bicycle', 'car', 'motorcycle', 'airplane', 'bus', 'train', 'truck', 'boat', 'traffic light',
-            'fire hydrant', 'stop sign', 'parking meter', 'bench', 'bird', 'cat', 'dog', 'horse', 'sheep', 'cow',
-            'elephant', 'bear', 'zebra', 'giraffe', 'backpack', 'umbrella', 'handbag', 'tie', 'suitcase', 'frisbee',
-            'skis', 'snowboard', 'sports ball', 'kite', 'baseball bat', 'baseball glove', 'skateboard', 'surfboard',
-            'tennis racket', 'bottle', 'wine glass', 'cup', 'fork', 'knife', 'spoon', 'bowl', 'banana', 'apple',
-            'sandwich', 'orange', 'broccoli', 'carrot', 'hot dog', 'pizza', 'donut', 'cake', 'chair', 'couch',
-            'potted plant', 'bed', 'dining table', 'toilet', 'tv', 'laptop', 'mouse', 'remote', 'keyboard', 'cell phone',
-            'microwave', 'oven', 'toaster', 'sink', 'refrigerator', 'book', 'clock', 'vase', 'scissors', 'teddy bear',
-            'hair drier', 'toothbrush'
-        ]
+
     
     def preprocess(self, image: np.ndarray) -> Tuple[np.ndarray, Dict[str, Any]]:
         """预处理图像"""
@@ -158,8 +143,3 @@ class DetectionInference(BaseONNXInference):
         
         return result
 
-
-# 便捷工厂函数
-def create_detector(model_path: str, **kwargs) -> DetectionInference:
-    """创建检测器"""
-    return DetectionInference(model_path, **kwargs)

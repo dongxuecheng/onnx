@@ -1,13 +1,12 @@
 import cv2
 import numpy as np
 import onnxruntime as ort
+import ast
+import onnx
 import os
-import time
 from abc import ABC, abstractmethod
 from typing import List, Tuple, Optional, Dict, Any, Union
-from datetime import datetime
 from enum import Enum
-import json
 
 
 class ModelType(Enum):
@@ -46,7 +45,7 @@ class TaskResult:
         }
 
 
-class BaseONNXInference(ABC):
+class BaseONNX(ABC):
     """ONNX推理基类"""
     
     def __init__(self, model_path: str, model_type: ModelType, device: str = "auto", **kwargs):
@@ -71,7 +70,7 @@ class BaseONNXInference(ABC):
         self.conf_threshold = kwargs.get('conf_threshold', 0.25)
         self.iou_threshold = kwargs.get('iou_threshold', 0.45)
         self.input_size = kwargs.get('input_size', (640, 640))
-        self.class_names = kwargs.get('class_names', [])
+        self.class_names = self._get_model_names()
         
         # 初始化模型
         self._load_model()
@@ -142,6 +141,15 @@ class BaseONNXInference(ABC):
                 'CPUExecutionProvider'
             ]
     
+    def _get_model_names(self) -> List[str]:
+        model = onnx.load(self.model_path)
+        metadata = model.metadata_props
+        for prop in metadata:
+            if prop.key == "names":   
+                label_mapping = ast.literal_eval(prop.value)
+                return list(label_mapping.values())
+
+
     @abstractmethod
     def preprocess(self, image: np.ndarray) -> Tuple[np.ndarray, Dict[str, Any]]:
         """
@@ -284,21 +292,48 @@ class BaseONNXInference(ABC):
     def _draw_segmentation(self, image: np.ndarray, result: TaskResult) -> np.ndarray:
         """绘制分割结果"""
         result_image = image.copy()
+
         
-        # 绘制检测框（如果有）
+        # 绘制轮廓（先绘制轮廓，再绘制框，这样框在上层）
+        if result.masks:
+            for i, (contour_points, class_id) in enumerate(zip(result.masks, result.class_ids)):
+                if len(contour_points) > 0:  # 检查是否有轮廓点
+                    # 获取类别对应的颜色
+                    color = np.random.randint(0, 255, 3).tolist()
+                    # 确保点坐标为int32类型用于绘制
+                    pts = contour_points.astype(np.int32)
+                    
+                    # 绘制填充的多边形（半透明效果）
+                    overlay = result_image.copy()
+                    cv2.fillPoly(overlay, [pts], color)
+                    alpha = 0.4
+                    result_image = cv2.addWeighted(result_image, 1-alpha, overlay, alpha, 0)
+                    
+                    # 绘制轮廓线
+                    cv2.polylines(result_image, [pts], True, color, 2)
+        
+        # 绘制检测框和标签
         if result.boxes:
-            result_image = self._draw_detection(image, result)
-        
-        # 绘制分割掩码
-        for i, mask in enumerate(result.masks):
-            if isinstance(mask, np.ndarray):
-                # 创建彩色掩码
-                color = np.random.randint(0, 255, 3).tolist()
-                colored_mask = np.zeros_like(image)
-                colored_mask[mask > 0] = color
+            for i, (box, score, class_id, class_name) in enumerate(
+                zip(result.boxes, result.scores, result.class_ids, result.class_names)
+            ):
+                x1, y1, x2, y2 = map(int, box)
                 
-                # 与原图混合
-                result_image = cv2.addWeighted(result_image, 0.8, colored_mask, 0.2, 0)
+                # 获取类别对应的颜色
+                color = np.random.randint(0, 255, 3).tolist()
+                
+                # 绘制边界框
+                cv2.rectangle(result_image, (x1, y1), (x2, y2), color, 2)
+                
+                # 绘制标签背景
+                label = f"{class_name}: {score:.2f}"
+                label_size = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 2)[0]
+                cv2.rectangle(result_image, (x1, y1 - label_size[1] - 10), 
+                            (x1 + label_size[0], y1), color, -1)
+                
+                # 绘制标签文本
+                cv2.putText(result_image, label, (x1, y1 - 5), 
+                          cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 2)
         
         return result_image
     
@@ -308,153 +343,39 @@ class BaseONNXInference(ABC):
         
         # 绘制检测框（如果有）
         if result.boxes:
-            result_image = self._draw_detection(image, result)
+            for i, (box, score) in enumerate(zip(result.boxes, result.scores)):
+                x1, y1, x2, y2 = map(int, box)
+                cv2.rectangle(result_image, (x1, y1), (x2, y2), (0, 255, 0), 2)
+                
+                # 绘制置信度
+                label = f"Person: {score:.2f}"
+                label_size = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 2)[0]
+                cv2.rectangle(result_image, (x1, y1 - label_size[1] - 10), 
+                             (x1 + label_size[0], y1), (0, 255, 0), -1)
+                cv2.putText(result_image, label, (x1, y1 - 5), 
+                           cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0), 2)
         
-        # 绘制关键点
+        # 绘制关键点和骨骼
         for keypoints in result.keypoints:
-            if isinstance(keypoints, (list, np.ndarray)) and len(keypoints) >= 17 * 3:  # COCO 17个关键点
-                # 重新整形为 (17, 3) - x, y, visibility
-                kpts = np.array(keypoints).reshape(-1, 3)
+            if isinstance(keypoints, np.ndarray) and keypoints.shape == (17, 2):
+                # 绘制骨骼连接线
+                for i, connection in enumerate(self.skeleton):
+                    kpt1_idx, kpt2_idx = connection[0] - 1, connection[1] - 1  # 转换为0-based索引
+                    if 0 <= kpt1_idx < len(keypoints) and 0 <= kpt2_idx < len(keypoints):
+                        x1, y1 = keypoints[kpt1_idx]
+                        x2, y2 = keypoints[kpt2_idx]
+                        # 检查关键点是否有效（不为[0, 0]）
+                        if (x1 > 0 or y1 > 0) and (x2 > 0 or y2 > 0):
+                            color = self.skeleton_colors[i % len(self.skeleton_colors)]
+                            cv2.line(result_image, (int(x1), int(y1)), (int(x2), int(y2)), 
+                                   color, 2)
                 
                 # 绘制关键点
-                for x, y, v in kpts:
-                    if v > 0.5:  # 可见性阈值
-                        cv2.circle(result_image, (int(x), int(y)), 3, (0, 0, 255), -1)
-                
-                # 绘制骨骼连接线
-                skeleton = [
-                    [16, 14], [14, 12], [17, 15], [15, 13], [12, 13],
-                    [6, 12], [7, 13], [6, 7], [6, 8], [7, 9],
-                    [8, 10], [9, 11], [2, 3], [1, 2], [1, 3],
-                    [2, 4], [3, 5], [4, 6], [5, 7]
-                ]
-                
-                for connection in skeleton:
-                    kpt1, kpt2 = connection
-                    if kpt1 - 1 < len(kpts) and kpt2 - 1 < len(kpts):
-                        x1, y1, v1 = kpts[kpt1 - 1]
-                        x2, y2, v2 = kpts[kpt2 - 1]
-                        if v1 > 0.5 and v2 > 0.5:
-                            cv2.line(result_image, (int(x1), int(y1)), (int(x2), int(y2)), 
-                                   (255, 0, 0), 2)
+                for i, (x, y) in enumerate(keypoints):
+                    if x > 0 or y > 0:  # 有效关键点
+                        color = self.keypoint_colors[i % len(self.keypoint_colors)]
+                        cv2.circle(result_image, (int(x), int(y)), 4, color, -1)
+                        cv2.circle(result_image, (int(x), int(y)), 6, (0, 0, 0), 2)
         
         return result_image
 
-
-class RTSPProcessor:
-    """RTSP流处理器"""
-    
-    def __init__(self, inference: BaseONNXInference):
-        """
-        初始化RTSP处理器
-        
-        Args:
-            inference: ONNX推理实例
-        """
-        self.inference = inference
-        self.cap = None
-    
-    def process_stream(self, rtsp_url: str, max_frames: Optional[int] = None, 
-                      display: bool = False, save_results: bool = False,
-                      output_dir: str = "rtsp_results"):
-        """
-        处理RTSP视频流
-        
-        Args:
-            rtsp_url: RTSP流地址
-            max_frames: 最大处理帧数
-            display: 是否显示实时画面
-            save_results: 是否保存结果
-            output_dir: 输出目录
-        """
-        print(f"连接RTSP流: {rtsp_url}")
-        self.cap = cv2.VideoCapture(rtsp_url)
-        self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 2)
-        
-        if not self.cap.isOpened():
-            raise RuntimeError("无法连接到RTSP流")
-        
-        # 创建输出目录
-        if save_results:
-            os.makedirs(output_dir, exist_ok=True)
-        
-        frame_count = 0
-        total_inference_time = 0
-        
-        try:
-            while True:
-                ret, frame = self.cap.read()
-                if not ret:
-                    print("无法读取帧，重新连接...")
-                    self.cap.release()
-                    time.sleep(2)
-                    self.cap = cv2.VideoCapture(rtsp_url)
-                    self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 2)
-                    continue
-                
-                frame_count += 1
-                start_time = time.time()
-                
-                # 推理
-                result = self.inference.predict(frame)
-                
-                inference_time = time.time() - start_time
-                total_inference_time += inference_time
-                
-                # 打印统计信息
-                if self.inference.model_type == ModelType.DETECTION:
-                    print(f"帧 {frame_count:6d} | "
-                          f"推理时间: {inference_time*1000:6.2f}ms | "
-                          f"检测目标: {len(result.boxes):2d}")
-                else:
-                    print(f"帧 {frame_count:6d} | "
-                          f"推理时间: {inference_time*1000:6.2f}ms | "
-                          f"任务类型: {result.task_type.value}")
-                
-                # 每100帧打印平均统计
-                if frame_count % 100 == 0:
-                    avg_inference = (total_inference_time / frame_count) * 1000
-                    fps = 1.0 / (avg_inference / 1000) if avg_inference > 0 else 0
-                    print(f"前 {frame_count} 帧平均推理时间: {avg_inference:.2f}ms, 理论FPS: {fps:.2f}")
-                
-                # 显示结果
-                if display:
-                    result_image = self.inference.draw_results(frame, result)
-                    
-                    # 添加信息
-                    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                    if self.inference.model_type == ModelType.DETECTION:
-                        info_text = f"Time: {timestamp} | Objects: {len(result.boxes)} | Frame: {frame_count}"
-                    else:
-                        info_text = f"Time: {timestamp} | Type: {result.task_type.value} | Frame: {frame_count}"
-                    
-                    cv2.putText(result_image, info_text, (10, 30), 
-                               cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
-                    
-                    display_image = cv2.resize(result_image, (960, 540))
-                    cv2.imshow(f'RTSP {self.inference.model_type.value}', display_image)
-                    
-                    if cv2.waitKey(1) & 0xFF == ord('q'):
-                        break
-                
-                # 保存结果
-                if save_results and (result.boxes or result.scores):
-                    result_image = self.inference.draw_results(frame, result)
-                    output_path = os.path.join(output_dir, f"frame_{frame_count:06d}.jpg")
-                    cv2.imwrite(output_path, result_image)
-                
-                # 检查最大帧数
-                if max_frames and frame_count >= max_frames:
-                    print(f"达到最大帧数限制: {max_frames}")
-                    break
-                    
-        except KeyboardInterrupt:
-            print("\n用户中断，正在退出...")
-        except Exception as e:
-            print(f"处理过程中出现错误: {e}")
-        finally:
-            if self.cap:
-                self.cap.release()
-            if display:
-                cv2.destroyAllWindows()
-            print(f"处理完成，共处理 {frame_count} 帧")

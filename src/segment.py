@@ -1,10 +1,10 @@
 import cv2
 import numpy as np
 from typing import List, Tuple, Dict, Any
-from base_onnx_inference import BaseONNXInference, ModelType, TaskResult
+from base_onnx import BaseONNX, ModelType, TaskResult
 
 
-class SegmentationInference(BaseONNXInference):
+class Segment(BaseONNX):
     """分割推理器"""
     
     def __init__(self, model_path: str, device: str = "auto", **kwargs):
@@ -14,27 +14,13 @@ class SegmentationInference(BaseONNXInference):
         Args:
             model_path: ONNX模型路径
             device: 设备类型 ("auto", "cuda", "cpu")
+            simplify_contours: 是否简化轮廓
+            downsample_contours: 是否对轮廓点进行下采样
             **kwargs: 其他参数
-        """
-        # 设置默认类别名称
-        if 'class_names' not in kwargs:
-            kwargs['class_names'] = self._get_coco_names()
-        
+        """        
         super().__init__(model_path, ModelType.SEGMENTATION, device, **kwargs)
     
-    def _get_coco_names(self) -> List[str]:
-        """获取COCO数据集类别名称"""
-        return [
-            'person', 'bicycle', 'car', 'motorcycle', 'airplane', 'bus', 'train', 'truck', 'boat', 'traffic light',
-            'fire hydrant', 'stop sign', 'parking meter', 'bench', 'bird', 'cat', 'dog', 'horse', 'sheep', 'cow',
-            'elephant', 'bear', 'zebra', 'giraffe', 'backpack', 'umbrella', 'handbag', 'tie', 'suitcase', 'frisbee',
-            'skis', 'snowboard', 'sports ball', 'kite', 'baseball bat', 'baseball glove', 'skateboard', 'surfboard',
-            'tennis racket', 'bottle', 'wine glass', 'cup', 'fork', 'knife', 'spoon', 'bowl', 'banana', 'apple',
-            'sandwich', 'orange', 'broccoli', 'carrot', 'hot dog', 'pizza', 'donut', 'cake', 'chair', 'couch',
-            'potted plant', 'bed', 'dining table', 'toilet', 'tv', 'laptop', 'mouse', 'remote', 'keyboard', 'cell phone',
-            'microwave', 'oven', 'toaster', 'sink', 'refrigerator', 'book', 'clock', 'vase', 'scissors', 'teddy bear',
-            'hair drier', 'toothbrush'
-        ]
+
     
     def preprocess(self, image: np.ndarray) -> Tuple[np.ndarray, Dict[str, Any]]:
         """预处理图像"""
@@ -169,7 +155,7 @@ class SegmentationInference(BaseONNXInference):
         return result
     
     def _process_masks(self, mask_outputs: List[np.ndarray], result: TaskResult, metadata: Dict[str, Any]):
-        """处理掩码输出 - 生成完整的分割掩码"""
+        """处理掩码输出 - 生成轮廓点坐标（类似YOLO mask.xy格式）"""
         if 'mask_coeffs' not in result.extra_data or len(mask_outputs) == 0:
             return
             
@@ -182,7 +168,7 @@ class SegmentationInference(BaseONNXInference):
         orig_h, orig_w = metadata['original_shape']
         scale = metadata['scale']
         
-        # 为每个检测到的目标生成掩码
+        # 为每个检测到的目标生成轮廓点
         for i, (mask_coeff, box) in enumerate(zip(result.extra_data['mask_coeffs'], result.boxes)):
             try:
                 # 使用掩码系数和原型生成掩码
@@ -204,7 +190,7 @@ class SegmentationInference(BaseONNXInference):
                 # 最后调整到原图尺寸
                 mask_final = cv2.resize(mask_cropped, (orig_w, orig_h))
                 
-                # 应用阈值
+                # 应用阈值得到二值掩码
                 mask_binary = (mask_final > 0.5).astype(np.uint8)
                 
                 # 可选：将掩码限制在检测框内
@@ -212,98 +198,28 @@ class SegmentationInference(BaseONNXInference):
                 mask_in_box = np.zeros_like(mask_binary)
                 mask_in_box[y1:y2, x1:x2] = mask_binary[y1:y2, x1:x2]
                 
-                result.masks.append(mask_in_box)
+                # 提取轮廓点坐标，使用更精细的方法
+                contours, _ = cv2.findContours(mask_in_box, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)  # 使用APPROX_NONE保留所有点
+                
+                # 如果找到轮廓，选择最大的轮廓作为主轮廓
+                if contours:
+                    largest_contour = max(contours, key=cv2.contourArea)
+                    
+                    # 将轮廓点转换为整数坐标，直接使用int类型避免科学计数法
+                    points = largest_contour.reshape(-1, 2)
+                    # 转换为整数类型，避免科学计数法显示
+                    points = points.astype(np.int32)
+                    
+                    if len(points) >= 3:  # 至少需要3个点形成有效轮廓
+                        result.masks.append(points)
+                    else:
+                        result.masks.append(np.array([], dtype=np.int32).reshape(0, 2))
+                else:
+                    result.masks.append(np.array([], dtype=np.int32).reshape(0, 2))
                 
             except Exception as e:
-                print(f"掩码生成失败 (第{i}个目标): {e}")
-                # 创建一个空掩码作为fallback
-                empty_mask = np.zeros((orig_h, orig_w), dtype=np.uint8)
-                result.masks.append(empty_mask)
-    
-    def draw_segmentation_results(self, image: np.ndarray, result: TaskResult) -> np.ndarray:
-        """绘制分割结果（包含检测框和掩码）"""
-        result_image = image.copy()
-        
-        # 为每个类别生成固定颜色（确保颜色不会太暗）
-        colors = self._get_bright_colors(max(80, len(self.class_names)))
-        
-        # 绘制掩码（先绘制掩码，再绘制框，这样框在上层）
-        if result.masks:
-            for i, (mask, class_id) in enumerate(zip(result.masks, result.class_ids)):
-                if isinstance(mask, np.ndarray) and mask.sum() > 0:
-                    # 获取类别对应的颜色
-                    color = colors[class_id % len(colors)]
-                    
-                    # 创建彩色掩码
-                    colored_mask = np.zeros_like(image, dtype=np.uint8)
-                    colored_mask[mask > 0] = color
-                    
-                    # 与原图混合（半透明效果）
-                    alpha = 0.4
-                    mask_area = mask > 0
-                    result_image[mask_area] = cv2.addWeighted(
-                        image[mask_area], 1-alpha, 
-                        colored_mask[mask_area], alpha, 0
-                    )
-                    
-                    # 绘制掩码轮廓
-                    contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-                    cv2.drawContours(result_image, contours, -1, color, 2)
-        
-        # 绘制检测框和标签
-        if result.boxes:
-            for i, (box, score, class_id, class_name) in enumerate(
-                zip(result.boxes, result.scores, result.class_ids, result.class_names)
-            ):
-                x1, y1, x2, y2 = map(int, box)
-                
-                # 获取类别对应的颜色
-                color = colors[class_id % len(colors)]
-                
-                # 绘制边界框
-                cv2.rectangle(result_image, (x1, y1), (x2, y2), color, 2)
-                
-                # 绘制标签背景
-                label = f"{class_name}: {score:.2f}"
-                label_size = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 2)[0]
-                cv2.rectangle(result_image, (x1, y1 - label_size[1] - 10), 
-                            (x1 + label_size[0], y1), color, -1)
-                
-                # 绘制标签文本
-                cv2.putText(result_image, label, (x1, y1 - 5), 
-                          cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 2)
-        
-        return result_image
-    
-    def _get_colors(self, num_classes: int) -> List[Tuple[int, int, int]]:
-        """生成固定的颜色列表"""
-        np.random.seed(42)  # 固定随机种子，确保颜色一致
-        colors = []
-        for i in range(num_classes):
-            colors.append(tuple(np.random.randint(0, 255, 3).tolist()))
-        return colors
-    
-    def _get_bright_colors(self, num_classes: int) -> List[Tuple[int, int, int]]:
-        """生成明亮的固定颜色列表，避免黑色或太暗的颜色"""
-        np.random.seed(42)  # 固定随机种子，确保颜色一致
-        colors = []
-        for i in range(num_classes):
-            # 确保每个颜色通道至少有一个值较高，避免全黑
-            while True:
-                color = tuple(np.random.randint(64, 255, 3).tolist())  # 最小值从64开始
-                # 确保颜色的亮度足够（至少有一个通道 > 128）
-                if max(color) > 128:
-                    colors.append(color)
-                    break
-        return colors
-    
-    def draw_results(self, image: np.ndarray, result: TaskResult) -> np.ndarray:
-        """重写基类方法，使用自定义的分割绘制"""
-        return self.draw_segmentation_results(image, result)
+                print(f"轮廓点提取失败 (第{i}个目标): {e}")
+                # 创建空的numpy数组作为fallback
+                result.masks.append(np.array([], dtype=np.int32).reshape(0, 2))
     
 
-
-# 便捷工厂函数
-def create_segmentor(model_path: str, **kwargs) -> SegmentationInference:
-    """创建分割器"""
-    return SegmentationInference(model_path, **kwargs)

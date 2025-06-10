@@ -1,10 +1,10 @@
 import cv2
 import numpy as np
 from typing import List, Tuple, Dict, Any
-from base_onnx_inference import BaseONNXInference, ModelType, TaskResult
+from base_onnx import BaseONNX, ModelType, TaskResult
 
 
-class PoseInference(BaseONNXInference):
+class Pose(BaseONNX):
     """姿态估计推理器"""
     
     def __init__(self, model_path: str, device: str = "auto", **kwargs):
@@ -16,9 +16,6 @@ class PoseInference(BaseONNXInference):
             device: 设备类型 ("auto", "cuda", "cpu")
             **kwargs: 其他参数
         """
-        # 设置默认类别名称（通常只有person类别）
-        if 'class_names' not in kwargs:
-            kwargs['class_names'] = ['person']
         
         super().__init__(model_path, ModelType.POSE, device, **kwargs)
         
@@ -145,7 +142,7 @@ class PoseInference(BaseONNXInference):
             if box_area < 100:  # 姿态检测需要较大的目标
                 continue
             
-            # 转换关键点坐标
+            # 转换关键点坐标为YOLO格式 (17, 2) numpy数组
             scaled_keypoints = []
             valid_keypoints = 0
             
@@ -163,18 +160,23 @@ class PoseInference(BaseONNXInference):
                         scaled_x = max(0, min(orig_w, scaled_x))
                         scaled_y = max(0, min(orig_h, scaled_y))
                         
-                        scaled_keypoints.extend([scaled_x, scaled_y, kpt_v])
+                        # 只保存x, y坐标，丢弃可见性信息（模仿YOLO格式）
+                        scaled_keypoints.append([scaled_x, scaled_y])
                         
                         if kpt_v > 0.5:  # 可见性阈值
                             valid_keypoints += 1
                     else:
-                        scaled_keypoints.extend([0, 0, 0])
+                        # 无效关键点用[0, 0]表示
+                        scaled_keypoints.append([0.0, 0.0])
             
             # 只保留有足够可见关键点的检测结果
-            if valid_keypoints >= 3 and len(scaled_keypoints) == 51:
+            if valid_keypoints >= 3 and len(scaled_keypoints) == 17:
+                # 转换为numpy数组格式 (17, 2)
+                keypoints_array = np.array(scaled_keypoints, dtype=np.int32)
+                
                 boxes.append([x1, y1, x2, y2])
                 scores.append(float(conf))
-                keypoints_list.append(scaled_keypoints)
+                keypoints_list.append(keypoints_array)
         
         # 非极大值抑制
         if boxes:
@@ -191,93 +193,3 @@ class PoseInference(BaseONNXInference):
                 result.keypoints = [keypoints_list[i] for i in indices.flatten()]
         
         return result
-    
-    def draw_pose_results(self, image: np.ndarray, result: TaskResult) -> np.ndarray:
-        """专门的姿态估计结果绘制方法"""
-        result_image = image.copy()
-        
-        # 绘制检测框（如果有）
-        if result.boxes:
-            for i, (box, score) in enumerate(zip(result.boxes, result.scores)):
-                x1, y1, x2, y2 = map(int, box)
-                cv2.rectangle(result_image, (x1, y1), (x2, y2), (0, 255, 0), 2)
-                
-                # 绘制置信度
-                label = f"Person: {score:.2f}"
-                label_size = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 2)[0]
-                cv2.rectangle(result_image, (x1, y1 - label_size[1] - 10), 
-                             (x1 + label_size[0], y1), (0, 255, 0), -1)
-                cv2.putText(result_image, label, (x1, y1 - 5), 
-                           cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0), 2)
-        
-        # 绘制关键点和骨骼
-        for keypoints in result.keypoints:
-            if isinstance(keypoints, (list, np.ndarray)) and len(keypoints) == 51:  # 17 * 3
-                # 重新整形为 (17, 3) - x, y, visibility
-                kpts = np.array(keypoints).reshape(-1, 3)
-                
-                # 绘制骨骼连接线
-                for i, connection in enumerate(self.skeleton):
-                    kpt1_idx, kpt2_idx = connection[0] - 1, connection[1] - 1  # 转换为0-based索引
-                    if 0 <= kpt1_idx < len(kpts) and 0 <= kpt2_idx < len(kpts):
-                        x1, y1, v1 = kpts[kpt1_idx]
-                        x2, y2, v2 = kpts[kpt2_idx]
-                        if v1 > 0.5 and v2 > 0.5:  # 可见性阈值
-                            color = self.skeleton_colors[i % len(self.skeleton_colors)]
-                            cv2.line(result_image, (int(x1), int(y1)), (int(x2), int(y2)), 
-                                   color, 2)
-                
-                # 绘制关键点
-                for i, (x, y, v) in enumerate(kpts):
-                    if v > 0.5:  # 可见性阈值
-                        color = self.keypoint_colors[i % len(self.keypoint_colors)]
-                        cv2.circle(result_image, (int(x), int(y)), 4, color, -1)
-                        cv2.circle(result_image, (int(x), int(y)), 6, (0, 0, 0), 2)
-        
-        return result_image
-    
-    def get_pose_analysis(self, result: TaskResult) -> Dict[str, Any]:
-        """分析姿态信息"""
-        analysis = {
-            'person_count': len(result.keypoints),
-            'poses': []
-        }
-        
-        for i, keypoints in enumerate(result.keypoints):
-            if len(keypoints) == 51:  # 17 * 3
-                kpts = np.array(keypoints).reshape(-1, 3)
-                
-                pose_info = {
-                    'person_id': i,
-                    'visible_keypoints': int(np.sum(kpts[:, 2] > 0.5)),
-                    'keypoint_confidence_avg': float(np.mean(kpts[:, 2])),
-                    'body_parts': {}
-                }
-                
-                # 分析身体部位可见性
-                for j, name in enumerate(self.keypoint_names):
-                    if j < len(kpts):
-                        x, y, conf = kpts[j]
-                        pose_info['body_parts'][name] = {
-                            'x': float(x),
-                            'y': float(y),
-                            'confidence': float(conf),
-                            'visible': bool(conf > 0.5)
-                        }
-                
-                # 计算身体中心点
-                visible_points = kpts[kpts[:, 2] > 0.5]
-                if len(visible_points) > 0:
-                    center_x = np.mean(visible_points[:, 0])
-                    center_y = np.mean(visible_points[:, 1])
-                    pose_info['body_center'] = {'x': float(center_x), 'y': float(center_y)}
-                
-                analysis['poses'].append(pose_info)
-        
-        return analysis
-
-
-# 便捷工厂函数
-def create_pose_estimator(model_path: str, **kwargs) -> PoseInference:
-    """创建姿态估计器"""
-    return PoseInference(model_path, **kwargs)

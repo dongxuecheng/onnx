@@ -1,10 +1,10 @@
 import cv2
 import numpy as np
 from typing import List, Tuple, Dict, Any
-from base_onnx_inference import BaseONNXInference, ModelType, TaskResult
+from base_onnx import BaseONNX, ModelType, TaskResult
 
 
-class ClassificationInference(BaseONNXInference):
+class Classify(BaseONNX):
     """分类推理器"""
     
     def __init__(self, model_path: str, device: str = "auto", **kwargs):
@@ -16,9 +16,6 @@ class ClassificationInference(BaseONNXInference):
             device: 设备类型 ("auto", "cuda", "cpu")
             **kwargs: 其他参数
         """
-        # 设置默认类别名称
-        if 'class_names' not in kwargs:
-            kwargs['class_names'] = self._get_imagenet_names()
         
         # 分类模型通常输入大小为224x224
         if 'input_size' not in kwargs:
@@ -26,10 +23,6 @@ class ClassificationInference(BaseONNXInference):
         
         super().__init__(model_path, ModelType.CLASSIFICATION, device, **kwargs)
     
-    def _get_imagenet_names(self) -> List[str]:
-        """获取ImageNet数据集类别名称（示例）"""
-        # 这里只是示例，实际应用中应该加载完整的ImageNet类别
-        return [f"class_{i}" for i in range(1000)]
     
     def preprocess(self, image: np.ndarray) -> Tuple[np.ndarray, Dict[str, Any]]:
         """预处理图像"""
@@ -84,8 +77,3 @@ class ClassificationInference(BaseONNXInference):
         
         return result
 
-
-# 便捷工厂函数
-def create_classifier(model_path: str, **kwargs) -> ClassificationInference:
-    """创建分类器"""
-    return ClassificationInference(model_path, **kwargs)

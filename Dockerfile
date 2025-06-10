@@ -16,7 +16,7 @@ RUN pip3 config set global.index-url https://pypi.tuna.tsinghua.edu.cn/simple/
 RUN pip3 config set global.trusted-host pypi.tuna.tsinghua.edu.cn
 
 # Install required packages
-RUN pip3 install onnxruntime-gpu opencv-python "fastapi[standard]" PyYaml
+RUN pip3 install onnx onnxruntime-gpu opencv-python "fastapi[standard]" PyYaml
 
 RUN apt-get update && \
     apt-get install -y libglib2.0-0 && \
