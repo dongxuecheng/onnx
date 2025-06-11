@@ -5,7 +5,7 @@ import ast
 import onnx
 import os
 from abc import ABC, abstractmethod
-from typing import List, Tuple, Optional, Dict, Any, Union
+from typing import List, Tuple, Dict, Any
 from enum import Enum
 
 
@@ -27,8 +27,6 @@ class TaskResult:
         self.class_names = []   # 类别名称
         self.masks = []         # 分割掩码
         self.keypoints = []     # 关键点
-        self.features = []      # 特征向量（分类）
-        self.extra_data = {}    # 额外数据
         
     def to_dict(self) -> Dict[str, Any]:
         """转换为字典格式"""
@@ -39,9 +37,7 @@ class TaskResult:
             'class_ids': self.class_ids,
             'class_names': self.class_names,
             'masks': [mask.tolist() if isinstance(mask, np.ndarray) else mask for mask in self.masks],
-            'keypoints': self.keypoints,
-            'features': self.features,
-            'extra_data': self.extra_data
+            'keypoints': self.keypoints
         }
 
 
@@ -55,7 +51,7 @@ class BaseONNX(ABC):
         Args:
             model_path: ONNX模型路径
             model_type: 模型类型
-            device: 设备类型 ("auto", "cuda", "cpu")
+            device: 设备类型 ("auto", "cpu", "cuda", "cuda:0", "cuda:1", ...)
             **kwargs: 其他参数
         """
         self.model_path = model_path
@@ -105,9 +101,15 @@ class BaseONNX(ABC):
             print(f"输入形状: {self.input_shape}")
             print(f"输出名称: {self.output_names}")
             print(f"执行提供者: {used_providers}")
+            print(f"指定设备: {self.device}")
             
             if 'CUDAExecutionProvider' in used_providers:
-                print("✓ GPU加速已启用 - 使用CUDA")
+                # 如果指定了特定的CUDA设备，显示设备ID
+                if self.device.startswith("cuda") and ":" in self.device:
+                    device_id = self.device.split(":")[1]
+                    print(f"✓ GPU加速已启用 - 使用CUDA设备{device_id}")
+                else:
+                    print("✓ GPU加速已启用 - 使用CUDA")
             else:
                 print("⚠ 使用CPU运行")
                 
@@ -118,10 +120,19 @@ class BaseONNX(ABC):
         """获取执行提供者配置"""
         if self.device == "cpu":
             return ['CPUExecutionProvider']
-        elif self.device == "cuda":
+        elif self.device.startswith("cuda"):
+            # 解析设备ID
+            device_id = 0  # 默认设备ID
+            if ":" in self.device:
+                try:
+                    device_id = int(self.device.split(":")[1])
+                except (ValueError, IndexError):
+                    print(f"警告: 无法解析设备ID '{self.device}'，使用默认设备0")
+                    device_id = 0
+            
             return [
                 ('CUDAExecutionProvider', {
-                    'device_id': 0,
+                    'device_id': device_id,
                     'arena_extend_strategy': 'kNextPowerOfTwo',
                     'gpu_mem_limit': 2 * 1024 * 1024 * 1024,  # 2GB
                     'cudnn_conv_algo_search': 'EXHAUSTIVE',

@@ -71,9 +71,6 @@ class Classify(BaseONNX):
         result.class_ids = [int(i) for i in top_indices]
         result.class_names = [self.class_names[i] if i < len(self.class_names) 
                             else f"Class_{i}" for i in top_indices]
-        
-        # 保存完整的特征向量
-        result.features = probabilities.tolist()
-        
+
         return result
 

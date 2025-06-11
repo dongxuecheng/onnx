@@ -144,82 +144,69 @@ class Segment(BaseONNX):
                 result.class_names = [self.class_names[cid] if cid < len(self.class_names) 
                                     else f"Class_{cid}" for cid in result.class_ids]
                 
-                # 处理掩码系数（这里只保存系数，实际掩码生成需要原型掩码）
-                # 在实际应用中，你可能需要额外的原型掩码来生成最终的分割掩码
-                result.extra_data['mask_coeffs'] = [mask_coeffs[i] for i in indices.flatten()]
-                
-                # 如果有额外的掩码输出，处理它们
+                # 处理掩码输出 - 生成轮廓点坐标（类似YOLO mask.xy格式）
                 if len(outputs) > 1:
-                    self._process_masks(outputs[1:], result, metadata)
+                    selected_mask_coeffs = [mask_coeffs[i] for i in indices.flatten()]
+                    proto_masks = outputs[1]  # 掩码原型 [mask_dim, mask_h, mask_w]
+                    
+                    # 移除批次维度（如果存在）
+                    if len(proto_masks.shape) == 4:
+                        proto_masks = proto_masks[0]
+                    
+                    # 为每个检测到的目标生成轮廓点
+                    for i, (mask_coeff, box) in enumerate(zip(selected_mask_coeffs, result.boxes)):
+                        try:
+                            # 使用掩码系数和原型生成掩码
+                            # mask_coeff: [32], proto_masks: [32, mask_h, mask_w]
+                            mask = np.dot(mask_coeff, proto_masks.reshape(proto_masks.shape[0], -1))
+                            mask = mask.reshape(proto_masks.shape[1:])  # [mask_h, mask_w]
+                            
+                            # 应用sigmoid激活
+                            mask = 1.0 / (1.0 + np.exp(-mask))
+                            
+                            # 将掩码从模型输出尺寸调整到原图尺寸
+                            # 先调整到输入尺寸
+                            mask_resized = cv2.resize(mask, self.input_size)
+                            
+                            # 然后裁剪到实际使用的区域（去除padding）
+                            resized_h, resized_w = metadata['resized_shape']
+                            mask_cropped = mask_resized[:resized_h, :resized_w]
+                            
+                            # 最后调整到原图尺寸
+                            mask_final = cv2.resize(mask_cropped, (orig_w, orig_h))
+                            
+                            # 应用阈值得到二值掩码
+                            mask_binary = (mask_final > 0.5).astype(np.uint8)
+                            
+                            # 可选：将掩码限制在检测框内
+                            x1, y1, x2, y2 = box
+                            mask_in_box = np.zeros_like(mask_binary)
+                            mask_in_box[y1:y2, x1:x2] = mask_binary[y1:y2, x1:x2]
+                            
+                            # 提取轮廓点坐标，使用更精细的方法
+                            contours, _ = cv2.findContours(mask_in_box, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)  # 使用APPROX_NONE保留所有点
+                            
+                            # 如果找到轮廓，选择最大的轮廓作为主轮廓
+                            if contours:
+                                largest_contour = max(contours, key=cv2.contourArea)
+                                
+                                # 将轮廓点转换为整数坐标，直接使用int类型避免科学计数法
+                                points = largest_contour.reshape(-1, 2)
+                                # 转换为整数类型，避免科学计数法显示
+                                points = points.astype(np.int32)
+                                
+                                if len(points) >= 3:  # 至少需要3个点形成有效轮廓
+                                    result.masks.append(points)
+                                else:
+                                    result.masks.append(np.array([], dtype=np.int32).reshape(0, 2))
+                            else:
+                                result.masks.append(np.array([], dtype=np.int32).reshape(0, 2))
+                            
+                        except Exception as e:
+                            print(f"轮廓点提取失败 (第{i}个目标): {e}")
+                            # 创建空的numpy数组作为fallback
+                            result.masks.append(np.array([], dtype=np.int32).reshape(0, 2))
         
         return result
-    
-    def _process_masks(self, mask_outputs: List[np.ndarray], result: TaskResult, metadata: Dict[str, Any]):
-        """处理掩码输出 - 生成轮廓点坐标（类似YOLO mask.xy格式）"""
-        if 'mask_coeffs' not in result.extra_data or len(mask_outputs) == 0:
-            return
-            
-        proto_masks = mask_outputs[0]  # 掩码原型 [mask_dim, mask_h, mask_w]
-        
-        # 移除批次维度（如果存在）
-        if len(proto_masks.shape) == 4:
-            proto_masks = proto_masks[0]
-        
-        orig_h, orig_w = metadata['original_shape']
-        scale = metadata['scale']
-        
-        # 为每个检测到的目标生成轮廓点
-        for i, (mask_coeff, box) in enumerate(zip(result.extra_data['mask_coeffs'], result.boxes)):
-            try:
-                # 使用掩码系数和原型生成掩码
-                # mask_coeff: [32], proto_masks: [32, mask_h, mask_w]
-                mask = np.dot(mask_coeff, proto_masks.reshape(proto_masks.shape[0], -1))
-                mask = mask.reshape(proto_masks.shape[1:])  # [mask_h, mask_w]
-                
-                # 应用sigmoid激活
-                mask = 1.0 / (1.0 + np.exp(-mask))
-                
-                # 将掩码从模型输出尺寸调整到原图尺寸
-                # 先调整到输入尺寸
-                mask_resized = cv2.resize(mask, self.input_size)
-                
-                # 然后裁剪到实际使用的区域（去除padding）
-                resized_h, resized_w = metadata['resized_shape']
-                mask_cropped = mask_resized[:resized_h, :resized_w]
-                
-                # 最后调整到原图尺寸
-                mask_final = cv2.resize(mask_cropped, (orig_w, orig_h))
-                
-                # 应用阈值得到二值掩码
-                mask_binary = (mask_final > 0.5).astype(np.uint8)
-                
-                # 可选：将掩码限制在检测框内
-                x1, y1, x2, y2 = box
-                mask_in_box = np.zeros_like(mask_binary)
-                mask_in_box[y1:y2, x1:x2] = mask_binary[y1:y2, x1:x2]
-                
-                # 提取轮廓点坐标，使用更精细的方法
-                contours, _ = cv2.findContours(mask_in_box, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)  # 使用APPROX_NONE保留所有点
-                
-                # 如果找到轮廓，选择最大的轮廓作为主轮廓
-                if contours:
-                    largest_contour = max(contours, key=cv2.contourArea)
-                    
-                    # 将轮廓点转换为整数坐标，直接使用int类型避免科学计数法
-                    points = largest_contour.reshape(-1, 2)
-                    # 转换为整数类型，避免科学计数法显示
-                    points = points.astype(np.int32)
-                    
-                    if len(points) >= 3:  # 至少需要3个点形成有效轮廓
-                        result.masks.append(points)
-                    else:
-                        result.masks.append(np.array([], dtype=np.int32).reshape(0, 2))
-                else:
-                    result.masks.append(np.array([], dtype=np.int32).reshape(0, 2))
-                
-            except Exception as e:
-                print(f"轮廓点提取失败 (第{i}个目标): {e}")
-                # 创建空的numpy数组作为fallback
-                result.masks.append(np.array([], dtype=np.int32).reshape(0, 2))
     
 
