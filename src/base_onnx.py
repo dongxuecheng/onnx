@@ -27,6 +27,30 @@ class TaskResult:
         self.class_names = []   # 类别名称
         self.masks = []         # 分割掩码
         self.keypoints = []     # 关键点
+        self._original_image = None  # 原始图像
+        self._drawer = None          # 绘制器引用
+        
+    def set_context(self, original_image: np.ndarray, drawer):
+        """设置上下文信息"""
+        self._original_image = original_image
+        self._drawer = drawer
+        
+    def save(self, img_path: str):
+        """
+        将预测结果绘制在原始图像上并保存
+        
+        Args:
+            img_path: 保存路径
+        """
+        if self._original_image is None or self._drawer is None:
+            raise ValueError("未设置图像上下文，无法保存结果")
+        
+        # 绘制结果
+        result_image = self._drawer.draw_results(self._original_image, self)
+        
+        # 保存图像
+        cv2.imwrite(img_path, result_image)
+        print(f"预测结果已保存到: {img_path}")
         
     def to_dict(self) -> Dict[str, Any]:
         """转换为字典格式"""
@@ -206,6 +230,9 @@ class BaseONNX(ABC):
         
         # 后处理
         result = self.postprocess(outputs, metadata)
+        
+        # 设置上下文信息，使result可以调用save方法
+        result.set_context(image, self)
         
         return result
     

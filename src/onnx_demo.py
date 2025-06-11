@@ -4,18 +4,18 @@ from classify import Classify
 from pose import Pose
 import cv2
 
-image = cv2.imread("images/human2.jpg")
-model=Detect(model_path="model/yolo11n.onnx",device="cuda:1")
-result=model.predict(image)
+# image = cv2.imread("images/human2.jpg")
+# model=Detect(model_path="model/yolo11n.onnx",device="cuda:1")
+# result=model.predict(image)
 
-for box, score, class_name in zip(result.boxes, result.scores, result.class_names):
-    #print(f"目标 {i+1}: {class_name} - {score:.3f} - {box}")
-    if class_name == "person":
-        print(box)
+# for box, score, class_name in zip(result.boxes, result.scores, result.class_names):
+#     if score > 0.5:
+#         print(f"目标: {class_name} - {score:.3f} - {box}")
+#     # if class_name == "person":
+#     #     print(box)
 
-#绘制结果
-result_image = model.draw_results(image, result)
-cv2.imwrite("result/detection_result6.jpg", result_image)
+# #绘制结果
+# result.save("result/detect_result6.jpg")
 
 # image = cv2.imread("images/human3.jpg")
 # model=Segment(model_path="model/yolo11l-seg.onnx",imput_size=(1280,1280))
@@ -27,8 +27,7 @@ cv2.imwrite("result/detection_result6.jpg", result_image)
 #     # print(f"  掩码: {mask}")
 #     print(mask)
 
-# result_image = model.draw_results(image, result)
-# cv2.imwrite("result/seg_result5.jpg", result_image)
+# result.save("result/seg_result6.jpg")
 
 # image = cv2.imread("images/human3.jpg")
 # model=Classify(model_path="model/yolo11n-cls.onnx")
@@ -40,16 +39,14 @@ cv2.imwrite("result/detection_result6.jpg", result_image)
 # top_class = result.class_names[0]
 # top_score = result.scores[0]
 # print(f"Top class: {top_class} with score: {top_score:.4f}")
-# result_image = model.draw_results(image, result)
-# cv2.imwrite("result/cls_result3.jpg", result_image)
+# result.save("result/cls_result6.jpg")
 
-# image = cv2.imread("images/human3.jpg")
-# model=Pose(model_path="model/yolo11l-pose.onnx")
-# result=model.predict(image)
+image = cv2.imread("images/human3.jpg")
+model=Pose(model_path="model/yolo11l-pose.onnx")
+result=model.predict(image)
 
-# for box, score, class_name, keypoint in zip(result.boxes, result.scores, result.class_names, result.keypoints):
-#     print(f"目标 {class_name} - 置信度: {score:.3f}")
-#     print(f"  边界框: {box}")
-#     print(f"  关键点: {keypoint}")
-# result_image = model.draw_results(image, result)
-# cv2.imwrite("result/pose_result3.jpg", result_image)
+for box, score, class_name, keypoint in zip(result.boxes, result.scores, result.class_names, result.keypoints):
+    print(f"目标 {class_name} - 置信度: {score:.3f}")
+    print(f"  边界框: {box}")
+    print(f"  关键点: {keypoint}")
+result.save("result/pose_result6.jpg")
