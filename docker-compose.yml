@@ -13,7 +13,8 @@ services:
       - "5006:5006"
     volumes:
       # 核心部分：将当前目录 (.) 映射到容器内的 /app 目录
-      - .:/workspace
+      - .:/workspace/onnx
+      - /home/dxc/code/ai_exam:/workspace/ai_exam
     deploy:
       resources:
         reservations:

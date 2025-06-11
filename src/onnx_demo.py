@@ -17,17 +17,17 @@ import cv2
 # #绘制结果
 # result.save("result/detect_result6.jpg")
 
-# image = cv2.imread("images/human3.jpg")
-# model=Segment(model_path="model/yolo11l-seg.onnx",imput_size=(1280,1280))
-# result=model.predict(image)
+image = cv2.imread("images/human3.jpg")
+model=Segment(model_path="model/yolo11l-seg.onnx",imput_size=(1280,1280))
+result=model.predict(image)
 
-# for box, score, class_name,mask in zip(result.boxes, result.scores, result.class_names,result.masks):
-#     # print(f"目标{class_name} - 置信度: {score:.3f}")
-#     # print(f"  边界框: {box}")
-#     # print(f"  掩码: {mask}")
-#     print(mask)
+for box, score, class_name,mask in zip(result.boxes, result.scores, result.class_names,result.masks):
+    # print(f"目标{class_name} - 置信度: {score:.3f}")
+    # print(f"  边界框: {box}")
+    # print(f"  掩码: {mask}")
+    print(mask)
 
-# result.save("result/seg_result6.jpg")
+result.save("result/seg_result6.jpg")
 
 # image = cv2.imread("images/human3.jpg")
 # model=Classify(model_path="model/yolo11n-cls.onnx")
@@ -41,12 +41,12 @@ import cv2
 # print(f"Top class: {top_class} with score: {top_score:.4f}")
 # result.save("result/cls_result6.jpg")
 
-image = cv2.imread("images/human3.jpg")
-model=Pose(model_path="model/yolo11l-pose.onnx")
-result=model.predict(image)
+# image = cv2.imread("images/human3.jpg")
+# model=Pose(model_path="model/yolo11l-pose.onnx")
+# result=model.predict(image)
 
-for box, score, class_name, keypoint in zip(result.boxes, result.scores, result.class_names, result.keypoints):
-    print(f"目标 {class_name} - 置信度: {score:.3f}")
-    print(f"  边界框: {box}")
-    print(f"  关键点: {keypoint}")
-result.save("result/pose_result6.jpg")
+# for box, score, class_name, keypoint in zip(result.boxes, result.scores, result.class_names, result.keypoints):
+#     print(f"目标 {class_name} - 置信度: {score:.3f}")
+#     print(f"  边界框: {box}")
+#     print(f"  关键点: {keypoint}")
+# result.save("result/pose_result6.jpg")

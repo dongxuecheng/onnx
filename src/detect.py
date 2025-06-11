@@ -50,33 +50,36 @@ class Detect(BaseONNX):
         return input_tensor, metadata
     
     def postprocess(self, outputs: List[np.ndarray], metadata: Dict[str, Any]) -> TaskResult:
-        """后处理检测结果 - 仅处理纯检测模型（84通道）"""
+        """后处理检测结果 - 处理检测模型"""
         result = TaskResult(ModelType.DETECTION)
         predictions = outputs[0]
         scale = metadata['scale']
         orig_h, orig_w = metadata['original_shape']
         
-        # YOLO11检测模型输出格式处理: [batch, 84, num_detections] -> [batch, num_detections, 84]
-        # 检测模型: 84 = 4(bbox) + 80(classes)
+        # 动态获取类别数量
+        num_classes = len(self.class_names) if self.class_names else 80
+        expected_channels = 4 + num_classes  # 4(bbox) + num_classes
+        
+        # YOLO检测模型输出格式处理: [batch, channels, num_detections] -> [batch, num_detections, channels]
         if len(predictions.shape) == 3:
-            if predictions.shape[1] == 84:  # [1, 84, N] 格式
-                predictions = predictions.transpose(0, 2, 1)  # [1, N, 84]
-            elif predictions.shape[2] == 84:  # 已经是 [1, N, 84] 格式
+            if predictions.shape[1] == expected_channels:  # [1, channels, N] 格式
+                predictions = predictions.transpose(0, 2, 1)  # [1, N, channels]
+            elif predictions.shape[2] == expected_channels:  # 已经是 [1, N, channels] 格式
                 pass
             else:
-                raise ValueError(f"检测模型输出形状错误，期望84通道: {predictions.shape}")
+                raise ValueError(f"检测模型输出形状错误，期望{expected_channels}通道: {predictions.shape}")
         
         # 验证是检测模型格式
         num_channels = predictions.shape[2]
-        if num_channels != 84:
-            raise ValueError(f"检测模型期望84通道，实际得到: {num_channels}")
+        if num_channels != expected_channels:
+            raise ValueError(f"检测模型期望{expected_channels}通道，实际得到: {num_channels}")
         
         boxes, scores, class_ids = [], [], []
         
         for i, detection in enumerate(predictions[0]):
-            # detection: [x_center, y_center, width, height, class_0, class_1, ..., class_79]
+            # detection: [x_center, y_center, width, height, class_0, class_1, ..., class_n]
             bbox = detection[:4]  # 边界框坐标
-            class_scores = detection[4:84]  # 80个类别分数 (COCO数据集)
+            class_scores = detection[4:4+num_classes]  # 类别分数
             
             # 检查bbox数据是否有效
             if np.any(np.isnan(bbox)) or np.any(np.isinf(bbox)):
@@ -119,8 +122,8 @@ class Detect(BaseONNX):
             if box_area < 16:
                 continue
             
-            # 验证类别ID - COCO有80个类别
-            if class_id < 0 or class_id >= 80:
+            # 验证类别ID
+            if class_id < 0 or class_id >= num_classes:
                 continue
             
             boxes.append([x1, y1, x2, y2])

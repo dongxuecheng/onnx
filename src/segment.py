@@ -51,34 +51,38 @@ class Segment(BaseONNX):
         return input_tensor, metadata
     
     def postprocess(self, outputs: List[np.ndarray], metadata: Dict[str, Any]) -> TaskResult:
-        """后处理分割结果 - 仅处理分割模型（116通道）"""
+        """后处理分割结果 - 处理分割模型"""
         result = TaskResult(ModelType.SEGMENTATION)
         predictions = outputs[0]
         scale = metadata['scale']
         orig_h, orig_w = metadata['original_shape']
         
-        # YOLO11分割模型输出格式: [batch, 116, num_detections] -> [batch, num_detections, 116]
-        # 116 = 4(bbox) + 80(classes) + 32(masks)
+        # 动态获取类别数量和掩码维度
+        num_classes = len(self.class_names) if self.class_names else 80
+        mask_dim = 32  # 通常固定为32维
+        expected_channels = 4 + num_classes + mask_dim  # 4(bbox) + num_classes + 32(masks)
+        
+        # YOLO分割模型输出格式: [batch, channels, num_detections] -> [batch, num_detections, channels]
         if len(predictions.shape) == 3:
-            if predictions.shape[1] == 116:  # [1, 116, N] 格式
-                predictions = predictions.transpose(0, 2, 1)  # [1, N, 116]
-            elif predictions.shape[2] == 116:  # 已经是 [1, N, 116] 格式
+            if predictions.shape[1] == expected_channels:  # [1, channels, N] 格式
+                predictions = predictions.transpose(0, 2, 1)  # [1, N, channels]
+            elif predictions.shape[2] == expected_channels:  # 已经是 [1, N, channels] 格式
                 pass
             else:
-                raise ValueError(f"分割模型输出形状错误，期望116通道: {predictions.shape}")
+                raise ValueError(f"分割模型输出形状错误，期望{expected_channels}通道: {predictions.shape}")
         
         # 验证是分割模型格式
         num_channels = predictions.shape[2]
-        if num_channels != 116:
-            raise ValueError(f"分割模型期望116通道，实际得到: {num_channels}")
+        if num_channels != expected_channels:
+            raise ValueError(f"分割模型期望{expected_channels}通道，实际得到: {num_channels}")
         
         boxes, scores, class_ids, mask_coeffs = [], [], [], []
         
         for i, detection in enumerate(predictions[0]):
-            # detection: [x_center, y_center, width, height, class_0, class_1, ..., class_79, mask_0, ..., mask_31]
+            # detection: [x_center, y_center, width, height, class_0, class_1, ..., class_n, mask_0, ..., mask_31]
             bbox = detection[:4]  # 边界框坐标
-            class_scores = detection[4:84]  # 80个类别分数 (COCO数据集)
-            mask_coeff = detection[84:116]  # 32个掩码系数
+            class_scores = detection[4:4+num_classes]  # 类别分数
+            mask_coeff = detection[4+num_classes:4+num_classes+mask_dim]  # 32个掩码系数
             
             # 检查bbox数据是否有效
             if np.any(np.isnan(bbox)) or np.any(np.isinf(bbox)):
@@ -121,8 +125,8 @@ class Segment(BaseONNX):
             if box_area < 16:
                 continue
             
-            # 验证类别ID - COCO有80个类别
-            if class_id < 0 or class_id >= 80:
+            # 验证类别ID
+            if class_id < 0 or class_id >= num_classes:
                 continue
             
             boxes.append([x1, y1, x2, y2])
