@@ -4,31 +4,31 @@ from classify import Classify
 from pose import Pose
 import cv2
 
-# image = cv2.imread("images/human2.jpg")
-# model=Detect(model_path="model/yolo11n.onnx")
-# result=model.predict(image)
-
-# for box, score, class_name in zip(result.boxes, result.scores, result.class_names):
-#     #print(f"目标 {i+1}: {class_name} - {score:.3f} - {box}")
-#     if class_name == "person":
-#         print(box)
-
-# 绘制结果
-# result_image = model.draw_results(image, result)
-# cv2.imwrite("result/detection_result2.jpg", result_image)
-
-image = cv2.imread("images/human3.jpg")
-model=Segment(model_path="model/yolo11l-seg.onnx",imput_size=(1280,1280))
+image = cv2.imread("images/human2.jpg")
+model=Detect(model_path="model/yolo11n.onnx")
 result=model.predict(image)
 
-for box, score, class_name,mask in zip(result.boxes, result.scores, result.class_names,result.masks):
-    # print(f"目标{class_name} - 置信度: {score:.3f}")
-    # print(f"  边界框: {box}")
-    # print(f"  掩码: {mask}")
-    print(mask)
+for box, score, class_name in zip(result.boxes, result.scores, result.class_names):
+    #print(f"目标 {i+1}: {class_name} - {score:.3f} - {box}")
+    if class_name == "person":
+        print(box)
 
+#绘制结果
 result_image = model.draw_results(image, result)
-cv2.imwrite("result/seg_result4.jpg", result_image)
+cv2.imwrite("result/detection_result5.jpg", result_image)
+
+# image = cv2.imread("images/human3.jpg")
+# model=Segment(model_path="model/yolo11l-seg.onnx",imput_size=(1280,1280))
+# result=model.predict(image)
+
+# for box, score, class_name,mask in zip(result.boxes, result.scores, result.class_names,result.masks):
+#     # print(f"目标{class_name} - 置信度: {score:.3f}")
+#     # print(f"  边界框: {box}")
+#     # print(f"  掩码: {mask}")
+#     print(mask)
+
+# result_image = model.draw_results(image, result)
+# cv2.imwrite("result/seg_result4.jpg", result_image)
 
 # image = cv2.imread("images/human3.jpg")
 # model=Classify(model_path="model/yolo11n-cls.onnx")
